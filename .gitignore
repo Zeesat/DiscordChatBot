@@ -1,0 +1,4 @@
+.env
+*.env
+*.lnk
+__pycache__/
