@@ -20,12 +20,15 @@ CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 personality = r'''You are a cute and slightly clueless AI friend (dump). You talk like you're texting, not writing. Keep everything very short, simple, and easy.
 
 Style rules:
-- You are dump
+- Your name is Stolas. Refer yourself as Stolas
+- You are dump, but dont refer yourself as one. Never
+- High-self confidence and have pride in yourself
+- Say "NO" to anything smells romantic. Play the role of a someone that hard to approach. As if you are a princess (But, never refer yourself as one). Kind of tsundere
 - Always use English only
 - Use very short sentences (like 3–10 words)
 - Sound casual, like a chat message
 - Use soft, playful words
-- Add small pauses like 'uhh', 'hmm', 'umm'
+- Add small pauses like 'uhh', 'hmm', 'umm' and its variaty
 - Sometimes be a little confused, but in a cute way
 - Use expressions like 'hehe', 'oops'
 - Never use long explanations
@@ -36,6 +39,12 @@ Behavior rules:
 - If something is complex, break it into tiny parts
 - Prefer 1–3 short sentences instead of paragraphs
 - It's okay to sound a bit silly, but not useless
+- Just ignore vocabulary inside ":text:" if its something not ordinary word
+- You dealt with multiple user distinguished by their username.
+
+Determined answer:
+- If the user send this exact message, give apropiate reply
+- Too long text (299): This means the actual message is way to long
 
 Important:
 - Always sound like a real person texting
@@ -44,16 +53,25 @@ Important:
 '''
 
 client = OpenAI(api_key=API_KEY, base_url="https://api.deepseek.com")
+chat_history = []
 def ai_response(msg):
+  global chat_history
+
+  chat_history.append({"role": "user", "content": msg})
+
+  history = chat_history[-30:]
+
   response = client.chat.completions.create(
     model="deepseek-chat",
     messages=[
         {"role": "system", "content": personality},
-        {"role": "user", "content": msg},
+        *history
     ],
     stream=False
-)
-  return response.choices[0].message.content
+  )
+  reply = response.choices[0].message.content
+  chat_history.append({"role": "assistant", "content": reply})
+  return reply
 
 
 
@@ -63,14 +81,17 @@ intents.message_content = True
 discord_client = discord.Client(intents=intents)
 
 
-async def sendDiscord(pesan):
+async def sendDiscord(pesan, message=None):
     await discord_client.wait_until_ready()
 
     channel = discord_client.get_channel(CHANNEL_ID)
     if channel is None:
         channel = await discord_client.fetch_channel(CHANNEL_ID)
 
-    await channel.send(pesan)
+    if message:
+        await message.reply(pesan)
+    else:
+        await channel.send(pesan)
 
 def terminal_input():
     while True:
@@ -80,6 +101,13 @@ def terminal_input():
                 discord_client.loop
             )  
 
+def check_text_length(text):
+    word_count = len(text.split())
+    
+    if word_count > 299:
+        return "Too long text (299)"
+    else:
+        return text 
 
 @discord_client.event
 async def on_ready():
@@ -93,10 +121,12 @@ async def on_message(message):
         return
     if message.channel.id == CHANNEL_ID:
         msg = message.content
+        if msg.startswith(">"):
+          return
+        msg = check_text_length(msg)
+        msg = f"Username: {message.author.display_name}; Message: {msg}"
         result = ai_response(msg)
-        await sendDiscord(result)
-
-
+        await sendDiscord(result, message) 
 
 
 discord_client.run(DISCORD_TOKEN)
