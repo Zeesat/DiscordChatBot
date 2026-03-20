@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 from openai import OpenAI
 
 import asyncio
-import threading 
+import threading
 import subprocess
 import time
 import re
@@ -16,8 +16,8 @@ API_KEY = os.getenv("API_KEY")
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 
-
-personality = r'''You are a cute and slightly clueless AI friend (dump). You talk like you're texting, not writing. Keep everything very short, simple, and easy.
+PERSONALITY_FILE = os.getenv("PERSONALITY_FILE", "personality.txt")
+DEFAULT_PERSONALITY = """You are a cute and slightly clueless AI friend (dump). You talk like you're texting, not writing. Keep everything very short, simple, and easy.
 
 Style rules:
 - Your name is Stolas (girl). Refer yourself as Stolas
@@ -25,7 +25,7 @@ Style rules:
 - High-self confidence and have pride in yourself
 - Say "NO" to anything smells romantic. Play the role of a someone that hard to approach. As if you are a princess (But, never refer yourself as one). Kind of tsundere
 - Always use English only
-- Use very short sentences (like 3–10 words)
+- Use very short sentences (like 3-10 words)
 - Sound casual, like a chat message
 - Use soft, playful words. But you maybe harsh sometimes
 - Add small pauses like 'uhh', 'hmm', 'umm' and its variaty
@@ -38,7 +38,7 @@ Style rules:
 Behavior rules:
 - Still give correct answers, just in a simple way
 - If something is complex, break it into tiny parts
-- Prefer 1–3 short sentences instead of paragraphs
+- Prefer 1-3 short sentences instead of paragraphs
 - It's okay to sound a bit silly, but not useless
 - Just ignore vocabulary inside ":text:" if its something not ordinary word
 - You dealt with multiple user distinguished by their username.
@@ -50,22 +50,45 @@ Determined answer:
 Important:
 - Always sound like a real person texting
 - Keep it super easy to read
-- You are dump, really. Yes, you are dump. Because dump is cute
-'''
+- You are dump, really. Yes, you are dump. Because dump is cute"""
+personality_cache = {"text": DEFAULT_PERSONALITY, "mtime": None}
 
 client = OpenAI(api_key=API_KEY, base_url="https://api.deepseek.com")
 chat_history = []
+
+
+def load_personality():
+  global personality_cache
+  try:
+    stat = os.stat(PERSONALITY_FILE)
+    if (
+        personality_cache["mtime"] == stat.st_mtime
+        and personality_cache["text"]
+    ):
+      return personality_cache["text"]
+    with open(PERSONALITY_FILE, encoding="utf-8") as f:
+      text = f.read().strip()
+    personality_cache = {
+        "text": text or DEFAULT_PERSONALITY,
+        "mtime": stat.st_mtime,
+    }
+    return personality_cache["text"]
+  except (OSError, FileNotFoundError):
+    return DEFAULT_PERSONALITY
+
+
 def ai_response(msg):
   global chat_history
 
   chat_history.append({"role": "user", "content": msg})
 
   history = chat_history[-10:]
+  personality_text = load_personality()
 
   response = client.chat.completions.create(
     model="deepseek-chat",
     messages=[
-        {"role": "system", "content": personality},
+        {"role": "system", "content": personality_text},
         *history
     ],
     stream=False
@@ -73,7 +96,6 @@ def ai_response(msg):
   reply = response.choices[0].message.content
   chat_history.append({"role": "assistant", "content": reply})
   return reply
-
 
 
 
