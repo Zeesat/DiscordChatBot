@@ -10,6 +10,7 @@ import threading
 import subprocess
 import time
 import re
+import hashlib
 
 load_dotenv()
 API_KEY = os.getenv("API_KEY")
@@ -52,6 +53,10 @@ Important:
 - Keep it super easy to read
 - You are dump, really. Yes, you are dump. Because dump is cute"""
 personality_cache = {"text": DEFAULT_PERSONALITY, "mtime": None}
+CACHE_FILE = os.getenv("CACHE_FILE", "prompt_cache.json")
+CACHE_LOCK = threading.Lock()
+CACHE_MAX_ENTRIES = int(os.getenv("CACHE_MAX_ENTRIES", "400"))
+prompt_cache = {}
 
 client = OpenAI(api_key=API_KEY, base_url="https://api.deepseek.com")
 chat_history = []
@@ -77,6 +82,43 @@ def load_personality():
     return DEFAULT_PERSONALITY
 
 
+def make_prompt_key(messages):
+  payload = json.dumps(messages, ensure_ascii=False, sort_keys=True)
+  return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def load_prompt_cache():
+  if not os.path.exists(CACHE_FILE):
+    return {}
+  try:
+    with open(CACHE_FILE, encoding="utf-8") as f:
+      data = json.load(f)
+    return data if isinstance(data, dict) else {}
+  except (OSError, json.JSONDecodeError):
+    return {}
+
+
+def persist_prompt_cache():
+  with CACHE_LOCK:
+    if not prompt_cache:
+      return
+    if len(prompt_cache) > CACHE_MAX_ENTRIES:
+      oldest = sorted(
+          prompt_cache.items(),
+          key=lambda pair: pair[1].get("timestamp", 0)
+      )
+      for key, _ in oldest[:-CACHE_MAX_ENTRIES]:
+        prompt_cache.pop(key, None)
+    try:
+      with open(CACHE_FILE, "w", encoding="utf-8") as f:
+        json.dump(prompt_cache, f, ensure_ascii=False)
+    except OSError:
+      pass
+
+
+prompt_cache = load_prompt_cache()
+
+
 def ai_response(msg):
   global chat_history
 
@@ -84,16 +126,42 @@ def ai_response(msg):
 
   history = chat_history[-10:]
   personality_text = load_personality()
+  messages = [
+      {"role": "system", "content": personality_text},
+      *history
+  ]
+
+  prompt_key = make_prompt_key(messages)
+  with CACHE_LOCK:
+    cached = prompt_cache.get(prompt_key)
+  if cached:
+    usage = cached.get("usage", {})
+    print(f"[DeepSeek cache] hit {usage.get('prompt_cache_hit_tokens',0)} miss {usage.get('prompt_cache_miss_tokens',0)}")
+    reply = cached["response"]
+    chat_history.append({"role": "assistant", "content": reply})
+    return reply
 
   response = client.chat.completions.create(
     model="deepseek-chat",
-    messages=[
-        {"role": "system", "content": personality_text},
-        *history
-    ],
+    messages=messages,
     stream=False
   )
   reply = response.choices[0].message.content
+  usage = getattr(response, "usage", None)
+  usage_data = {
+      "prompt_cache_hit_tokens": getattr(usage, "prompt_cache_hit_tokens", 0),
+      "prompt_cache_miss_tokens": getattr(usage, "prompt_cache_miss_tokens", 0),
+  }
+  log_entry = {
+    "response": reply,
+    "usage": usage_data,
+    "timestamp": time.time()
+  }
+  with CACHE_LOCK:
+    prompt_cache[prompt_key] = log_entry
+  persist_prompt_cache()
+  print(f"[DeepSeek API] hit {usage_data['prompt_cache_hit_tokens']} miss {usage_data['prompt_cache_miss_tokens']}")
+
   chat_history.append({"role": "assistant", "content": reply})
   return reply
 
